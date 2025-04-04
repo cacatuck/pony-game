@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pony Platformer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            touch-action: none;
+            background: linear-gradient(to bottom, #87CEEB, #E0F7FA);
+            font-family: Arial, sans-serif;
+        }
+        
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #gameCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            padding: 0 20px;
+            box-sizing: border-box;
+            z-index: 10;
+        }
+        
+        .btn {
+            width: 60px;
+            height: 60px;
+            background-color: rgba(255, 255, 255, 0.7);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            user-select: none;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        
+        #startScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+        }
+        
+        #startScreen h1 {
+            color: white;
+            font-size: 32px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        #colorPicker {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        
+        .color-option {
+            width: 40px;
+            height: 40px;
+            margin: 0 5px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 3px solid transparent;
+        }
+        
+        .color-option.selected {
+            border-color: white;
+        }
+        
+        #startButton {
+            padding: 15px 30px;
+            background-color: #FF69B4;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 18px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        
+        #roomCodeContainer {
+            margin: 20px 0;
+            color: white;
+            text-align: center;
+        }
+        
+        #roomCode {
+            padding: 10px;
+            font-size: 18px;
+            width: 200px;
+            text-align: center;
+            margin-top: 10px;
+        }
+        
+        #countdown {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 72px;
+            color: white;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+            z-index: 15;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div class="controls">
+            <div class="btn" id="leftBtn">←</div>
+            <div class="btn" id="rightBtn">→</div>
+        </div>
+        
+        <div id="countdown">3</div>
+        
+        <div id="startScreen">
+            <h1>Pony Platformer</h1>
+            
+            <div id="colorPicker">
+                <div class="color-option selected" style="background-color: #FF69B4;" data-color="#FF69B4"></div>
+                <div class="color-option" style="background-color: #9B59B6;" data-color="#9B59B6"></div>
+                <div class="color-option" style="background-color: #3498DB;" data-color="#3498DB"></div>
+                <div class="color-option" style="background-color: #2ECC71;" data-color="#2ECC71"></div>
+                <div class="color-option" style="background-color: #F1C40F;" data-color="#F1C40F"></div>
+            </div>
+            
+            <div id="roomCodeContainer">
+                <div>Room Code:</div>
+                <input type="text" id="roomCode" placeholder="Enter room code">
+            </div>
+            
+            <button id="startButton">Start Game</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
+    <script>
+        // Game configuration
+        const config = {
+            canvasWidth: window.innerWidth,
+            canvasHeight: window.innerHeight,
+            gravity: 0.5,
+            jumpForce: -15,
+            ponyWidth: 80,
+            ponyHeight: 60,
+            platformHeight: 20,
+            movementSpeed: 5
+        };
+        
+        // Game elements
+        const game = {
+            canvas: document.getElementById('gameCanvas'),
+            ctx: null,
+            players: {},
+            platforms: [],
+            backgroundColor: '#87CEEB',
+            isRunning: false,
+            localPlayerId: null,
+            selectedColor: '#FF69B4',
+            frameCount: 0,
+            roomCode: '',
+            isHost: false
+        };
+        
+        // Virtual server simulation (for demo purposes)
+        // In a real implementation, this would be replaced with actual server communication
+        const virtualServer = {
+            rooms: {},
+            createRoom: function() {
+                const roomCode = Math.floor(100000 + Math.random() * 900000).toString();
+                this.rooms[roomCode] = {
+                    players: {},
+                    platformSeed: Math.random()
+                };
+                return roomCode;
+            },
+            joinRoom: function(roomCode, playerId, playerData) {
+                if (!this.rooms[roomCode]) {
+                    return false;
+                }
+                this.rooms[roomCode].players[playerId] = playerData;
+                return true;
+            },
+            updatePlayerPosition: function(roomCode, playerId, x, y, vx, vy) {
+                if (this.rooms[roomCode] && this.rooms[roomCode].players[playerId]) {
+                    this.rooms[roomCode].players[playerId].x = x;
+                    this.rooms[roomCode].players[playerId].y = y;
+                    this.rooms[roomCode].players[playerId].vx = vx;
+                    this.rooms[roomCode].players[playerId].vy = vy;
+                }
+            },
+            getRoomPlayers: function(roomCode) {
+                return this.rooms[roomCode] ? this.rooms[roomCode].players : null;
+            },
+            getRoomSeed: function(roomCode) {
+                return this.rooms[roomCode] ? this.rooms[roomCode].platformSeed : 0;
+            }
+        };
+        
+        // Initialize the game
+        function initGame() {
+            // Set up canvas
+            game.canvas.width = config.canvasWidth;
+            game.canvas.height = config.canvasHeight;
+            game.ctx = game.canvas.getContext('2d');
+            
+            // Event listeners for color selection
+            document.querySelectorAll('.color-option').forEach(option => {
+                option.addEventListener('click', function() {
+                    document.querySelectorAll('.color-option').forEach(opt => {
+                        opt.classList.remove('selected');
+                    });
+                    this.classList.add('selected');
+                    game.selectedColor = this.getAttribute('data-color');
+                });
+            });
+            
+            // Touch controls
+            const leftBtn = document.getElementById('leftBtn');
+            const rightBtn = document.getElementById('rightBtn');
+            
+            leftBtn.addEventListener('touchstart', function(e) {
+                e.preventDefault();
+                game.players[game.localPlayerId].keys.left = true;
+            });
+            
+            leftBtn.addEventListener('touchend', function(e) {
+                e.preventDefault();
+                game.players[game.localPlayerId].keys.left = false;
+            });
+            
+            rightBtn.addEventListener('touchstart', function(e) {
+                e.preventDefault();
+                game.players[game.localPlayerId].keys.right = true;
+            });
+            
+            rightBtn.addEventListener('touchend', function(e) {
+                e.preventDefault();
+                game.players[game.localPlayerId].keys.right = false;
+            });
+            
+            // Double-tap to jump
+            document.addEventListener('touchend', function(e) {
+                if (e.target.classList.contains('btn')) return;
+                
+                const now = new Date().getTime();
+                const timeSince = now - (game.lastTap || 0);
+                
+                if (timeSince < 300 && timeSince > 0) {
+                    e.preventDefault();
+                    if (game.players[game.localPlayerId] && game.players[game.localPlayerId].canJump) {
+                        game.players[game.localPlayerId].vy = config.jumpForce;
+                        game.players[game.localPlayerId].canJump = false;
+                    }
+                }
+                
+                game.lastTap = now;
+            });
+            
+            // Keyboard controls for testing on desktop
+            window.addEventListener('keydown', function(e) {
+                if (!game.players[game.localPlayerId]) return;
+                
+                if (e.key === 'ArrowLeft' || e.key === 'a') {
+                    game.players[game.localPlayerId].keys.left = true;
+                }
+                if (e.key === 'ArrowRight' || e.key === 'd') {
+                    game.players[game.localPlayerId].keys.right = true;
+                }
+                if ((e.key === 'ArrowUp' || e.key === 'w' || e.key === ' ') && game.players[game.localPlayerId].canJump) {
+                    game.players[game.localPlayerId].vy = config.jumpForce;
+                    game.players[game.localPlayerId].canJump = false;
+                }
+            });
+            
+            window.addEventListener('keyup', function(e) {
+                if (!game.players[game.localPlayerId]) return;
+                
+                if (e.key === 'ArrowLeft' || e.key === 'a') {
+                    game.players[game.localPlayerId].keys.left = false;
+                }
+                if (e.key === 'ArrowRight' || e.key === 'd') {
+                    game.players[game.localPlayerId].keys.right = false;
+                }
+            });
+            
+            // Start game button logic
+            document.getElementById('startButton').addEventListener('click', function() {
+                const roomCodeInput = document.getElementById('roomCode').value.trim();
+                
+                if (roomCodeInput === '') {
+                    // Create a new room
+                    startNewGame();
+                } else {
+                    // Join existing room
+                    joinGame(roomCodeInput);
+                }
+            });
+        }
+        
+        function startNewGame() {
+            // Create a new room
+            game.roomCode = virtualServer.createRoom();
+            game.isHost = true;
+            document.getElementById('roomCode').value = game.roomCode;
+            
+            // Initialize local player
+            game.localPlayerId = 'player_' + Date.now();
+            const localPlayer = createPlayer(game.localPlayerId, 100, 100, game.selectedColor);
+            game.players[game.localPlayerId] = localPlayer;
+            
+            // Add player to the virtual server
+            virtualServer.joinRoom(game.roomCode, game.localPlayerId, {
+                x: localPlayer.x,
+                y: localPlayer.y,
+                color: localPlayer.color,
+                vx: 0,
+                vy: 0
+            });
+            
+            // Generate platforms
+            generatePlatforms();
+            
+            // Start countdown
+            startCountdown();
+        }
+        
+        function joinGame(roomCode) {
+            // Check if room exists
+            if (!virtualServer.rooms[roomCode]) {
+                alert('Room not found. Please check the code and try again.');
+                return;
+            }
+            
+            game.roomCode = roomCode;
+            game.isHost = false;
+            
+            // Initialize local player
+            game.localPlayerId = 'player_' + Date.now();
+            const localPlayer = createPlayer(game.localPlayerId, 100, 100, game.selectedColor);
+            game.players[game.localPlayerId] = localPlayer;
+            
+            // Add player to the virtual server
+            virtualServer.joinRoom(game.roomCode, game.localPlayerId, {
+                x: localPlayer.x,
+                y: localPlayer.y,
+                color: localPlayer.color,
+                vx: 0,
+                vy: 0
+            });
+            
+            // Get existing players in the room
+            const roomPlayers = virtualServer.getRoomPlayers(game.roomCode);
+            for (const playerId in roomPlayers) {
+                if (playerId !== game.localPlayerId) {
+                    const playerData = roomPlayers[playerId];
+                    game.players[playerId] = createPlayer(
+                        playerId,
+                        playerData.x,
+                        playerData.y,
+                        playerData.color
+                    );
+                }
+            }
+            
+            // Generate platforms using room's seed
+            generatePlatforms(virtualServer.getRoomSeed(game.roomCode));
+            
+            // Start countdown
+            startCountdown();
+        }
+        
+        function startCountdown() {
+            const countdownEl = document.getElementById('countdown');
+            countdownEl.style.display = 'block';
+            
+            let count = 3;
+            countdownEl.textContent = count;
+            
+            const interval = setInterval(() => {
+                count--;
+                
+                if (count <= 0) {
+                    clearInterval(interval);
+                    countdownEl.style.display = 'none';
+                    document.getElementById('startScreen').style.display = 'none';
+                    
+                    // Start the game loop
+                    game.isRunning = true;
+                    gameLoop();
+                } else {
+                    countdownEl.textContent = count;
+                }
+            }, 1000);
+        }
+        
+        function createPlayer(id, x, y, color) {
+            return {
+                id: id,
+                x: x,
+                y: y,
+                width: config.ponyWidth,
+                height: config.ponyHeight,
+                color: color,
+                vx: 0,
+                vy: 0,
+                canJump: false,
+                keys: {
+                    left: false,
+                    right: false
+                },
+                legFrame: 0,
+                maneOffset: 0
+            };
+        }
+        
+        function generatePlatforms(seed) {
+            // Clear existing platforms
+            game.platforms = [];
+            
+            // Use seed for deterministic generation
+            const rng = seed !== undefined ? new SeededRandom(seed) : new SeededRandom(Math.random());
+            
+            // Ground platform
+            game.platforms.push({
+                x: 0,
+                y: config.canvasHeight - 50,
+                width: config.canvasWidth,
+                height: config.platformHeight,
+                color: '#8B4513'
+            });
+            
+            // Generate random platforms
+            const numPlatforms = 10;
+            const minWidth = 100;
+            const maxWidth = 200;
+            
+            for (let i = 0; i < numPlatforms; i++) {
+                const width = minWidth + rng.random() * (maxWidth - minWidth);
+                const x = rng.random() * (config.canvasWidth - width);
+                const y = 100 + rng.random() * (config.canvasHeight - 250);
+                
+                game.platforms.push({
+                    x: x,
+                    y: y,
+                    width: width,
+                    height: config.platformHeight,
+                    color: '#8B4513'
+                });
+            }
+        }
+        
+        // Seeded random number generator for consistent platform generation
+        function SeededRandom(seed) {
+            this.seed = seed;
+            
+            this.random = function() {
+                const x = Math.sin(this.seed++) * 10000;
+                return x - Math.floor(x);
+            };
+        }
+        
+        function updatePlayer(player) {
+            // Apply gravity
+            player.vy += config.gravity;
+            
+            // Apply horizontal movement based on keys
+            if (player.keys.left) {
+                player.vx = -config.movementSpeed;
+                player.legFrame += 0.2;
+                player.maneOffset = -5;
+            } else if (player.keys.right) {
+                player.vx = config.movementSpeed;
+                player.legFrame += 0.2;
+                player.maneOffset = 5;
+            } else {
+                player.vx = 0;
+                player.maneOffset = 0;
+            }
+            
+            // Update position
+            player.x += player.vx;
+            player.y += player.vy;
+            
+            // Check platform collisions
+            player.canJump = false;
+            for (const platform of game.platforms) {
+                if (player.vy > 0 &&
+                    player.y + player.height > platform.y &&
+                    player.y + player.height < platform.y + platform.height + 10 &&
+                    player.x + player.width > platform.x &&
+                    player.x < platform.x + platform.width) {
+                    
+                    player.y = platform.y - player.height;
+                    player.vy = 0;
+                    player.canJump = true;
+                }
+            }
+            
+            // Screen boundaries
+            if (player.x < 0) {
+                player.x = 0;
+            }
+            if (player.x + player.width > config.canvasWidth) {
+                player.x = config.canvasWidth - player.width;
+            }
+            
+            // Falling off the bottom
+            if (player.y > config.canvasHeight) {
+                player.x = 100;
+                player.y = 100;
+                player.vy = 0;
+            }
+            
+            // Update server with player position
+            if (player.id === game.localPlayerId) {
+                virtualServer.updatePlayerPosition(
+                    game.roomCode,
+                    player.id,
+                    player.x,
+                    player.y,
+                    player.vx,
+                    player.vy
+                );
+            }
+        }
+        
+        function syncWithServer() {
+            // Get all players from server
+            const serverPlayers = virtualServer.getRoomPlayers(game.roomCode);
+            
+            if (!serverPlayers) return;
+            
+            // Update remote players' positions
+            for (const playerId in serverPlayers) {
+                if (playerId !== game.localPlayerId) {
+                    const serverData = serverPlayers[playerId];
+                    
+                    // If player doesn't exist locally, create them
+                    if (!game.players[playerId]) {
+                        game.players[playerId] = createPlayer(
+                            playerId,
+                            serverData.x,
+                            serverData.y,
+                            serverData.color
+                        );
+                    } 
+                    // Otherwise, update their position
+                    else {
+                        game.players[playerId].x = serverData.x;
+                        game.players[playerId].y = serverData.y;
+                        game.players[playerId].vx = serverData.vx;
+                        game.players[playerId].vy = serverData.vy;
+                    }
+                }
+            }
+        }
+        
+        function drawPony(player) {
+            const ctx = game.ctx;
+            const x = player.x;
+            const y = player.y;
+            const width = player.width;
+            const height = player.height;
+            const color = player.color;
+            
+            // Body
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.ellipse(x + width/2, y + height/2, width/2, height/3, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Head
+            ctx.beginPath();
+            ctx.ellipse(x + width*0.8, y + height*0.3, width*0.25, height*0.25, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Mane
+            ctx.fillStyle = lightenColor(color, 30);
+            ctx.beginPath();
+            ctx.ellipse(
+                x + width*0.7 + player.maneOffset*0.5, 
+                y + height*0.2, 
+                width*0.3, 
+                height*0.15, 
+                0, 0, Math.PI * 2
+            );
+            ctx.fill();
+            
+            // Tail
+            ctx.beginPath();
+            ctx.moveTo(x + width*0.1, y + height*0.4);
+            ctx.quadraticCurveTo(
+                x - width*0.2, 
+                y + height*0.5 + Math.sin(player.legFrame*0.2)*5, 
+                x, 
+                y + height*0.7
+            );
+            ctx.quadraticCurveTo(
+                x - width*0.1,
+                y + height*0.5 + Math.sin(player.legFrame*0.2 + 1)*5,
+                x + width*0.1,
+                y + height*0.4
+            );
+            ctx.fill();
+            
+            // Legs
+            ctx.fillStyle = color;
+            // Front legs
+            const legWidth = width*0.1;
+            const frontLegX = x + width*0.7;
+            const backLegX = x + width*0.3;
+            
+            // Front leg movement
+            const frontLegOffset = Math.sin(player.legFrame) * 5;
+            ctx.fillRect(
+                frontLegX - legWidth/2 + frontLegOffset, 
+                y + height*0.5, 
+                legWidth, 
+                height*0.4
+            );
+            ctx.fillRect(
+                frontLegX - legWidth/2 - frontLegOffset, 
+                y + height*0.5, 
+                legWidth, 
+                height*0.4
+            );
+            
+            // Back leg movement
+            const backLegOffset = Math.sin(player.legFrame + Math.PI) * 5;
+            ctx.fillRect(
+                backLegX - legWidth/2 + backLegOffset, 
+                y + height*0.5, 
+                legWidth, 
+                height*0.4
+            );
+            ctx.fillRect(
+                backLegX - legWidth/2 - backLegOffset, 
+                y + height*0.5, 
+                legWidth, 
+                height*0.4
+            );
+            
+            // Eyes
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.ellipse(x + width*0.9, y + height*0.25, width*0.07, height*0.07, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Pupils
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.ellipse(x + width*0.92, y + height*0.25, width*0.03, height*0.03, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        function lightenColor(color, percent) {
+            const num = parseInt(color.slice(1), 16);
+            const r = Math.min(255, Math.floor((num >> 16) + (256 * percent / 100)));
+            const g = Math.min(255, Math.floor((num >> 8 & 0x00FF) + (256 * percent / 100)));
+            const b = Math.min(255, Math.floor((num & 0x0000FF) + (256 * percent / 100)));
+            return `#${(r << 16 | g << 8 | b).toString(16).padStart(6, '0')}`;
+        }
+        
+        function draw() {
+            const ctx = game.ctx;
+            
+            // Clear canvas
+            ctx.fillStyle = game.backgroundColor;
+            ctx.fillRect(0, 0, config.canvasWidth, config.canvasHeight);
+            
+            // Draw clouds (move slowly every frame)
+            game.frameCount++;
+            drawBackground();
+            
+            // Draw platforms
+            for (const platform of game.platforms) {
+                ctx.fillStyle = platform.color;
+                ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+                
+                // Draw grass on top
+                ctx.fillStyle = '#7CFC00';
+                ctx.fillRect(platform.x, platform.y - 5, platform.width, 5);
+            }
+            
+            // Draw players
+            for (const playerId in game.players) {
+                drawPony(game.players[playerId]);
+            }
+            
+            // Draw room code
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(10, 10, 150, 30);
+            ctx.fillStyle = 'white';
+            ctx.font = '16px Arial';
+            ctx.fillText(`Room: ${game.roomCode}`, 20, 30);
+        }
+        
+        function drawBackground() {
+            const ctx = game.ctx;
+            
+            // Draw sun
+            ctx.fillStyle = '#FFD700';
+            ctx.beginPath();
+            ctx.arc(config.canvasWidth - 100, 100, 50, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Draw clouds
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            
+            // Cloud 1 (moving)
+            const cloudOffset = (game.frameCount * 0.5) % (config.canvasWidth + 300);
+            drawCloud(ctx, cloudOffset - 150, 80, 120, 40);
+            
+            // Cloud 2 (moving slower)
+            const cloud2Offset = (game.frameCount * 0.3) % (config.canvasWidth + 300);
+            drawCloud(ctx, cloud2Offset - 150, 150, 180, 50);
+            
+            // Cloud 3 (moving slowest)
+            const cloud3Offset = (game.frameCount * 0.2) % (config.canvasWidth + 300);
+            drawCloud(ctx, cloud3Offset - 150, 50, 150, 45);
+        }
+        
+        function drawCloud(ctx, x, y, width, height) {
+            ctx.beginPath();
+            ctx.arc(x + width * 0.3, y, height * 0.8, 0, Math.PI * 2);
+            ctx.arc(x + width * 0.7, y, height * 0.8, 0, Math.PI * 2);
+            ctx.arc(x + width * 0.5, y - height * 0.3, height * 0.7, 0, Math.PI * 2);
+            ctx.arc(x + width * 0.2, y + height * 0.3, height * 0.6, 0, Math.PI * 2);
+            ctx.arc(x + width * 0.8, y + height * 0.3, height * 0.6, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        function gameLoop() {
+            if (!game.isRunning) return;
+            
+            // Update local player
+            if (game.players[game.localPlayerId]) {
+                updatePlayer(game.players[game.localPlayerId]);
+            }
+            
+            // Sync with server
+            syncWithServer();
+            
+            // Draw the game
+            draw();
+            
+            // Request next frame
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Initialize the game when the page loads
+        window.addEventListener('load', initGame);
+    </script>
+</body>
+</html>
